@@ -99,7 +99,8 @@ with DAG(
     terminate_cluster = EmrTerminateJobFlowOperator(
         task_id='remove_cluster',
         job_flow_id="{{ task_instance.xcom_pull(task_ids='create_emr_cluster', key='return_value') }}",
-        aws_conn_id='aws_default'
+        aws_conn_id='aws_default',
+        trigger_rule="all_done"
     )
 
 
