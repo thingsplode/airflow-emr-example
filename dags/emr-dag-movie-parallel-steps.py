@@ -16,7 +16,7 @@ DEFAULT_ARGS = {
     'email_on_retry': False
 }
 
-SPARK_STEPS_1 = [
+SPARK_STEP_1_PROPS = [
     {
         'Name': 'calculate_movie_ratings_1',
         'ActionOnFailure': 'CONTINUE',
@@ -25,7 +25,7 @@ SPARK_STEPS_1 = [
             'Args': [
                 'spark-submit',
                 '--deploy-mode', 'cluster',
-                's3://<s3-bucket>/jobs/movies-analytics.py',
+                's3://<s3-bucket>/jobs/avg_rating.py',
                 '-i', 's3://<s3-bucket>/data',
                 '-o', 's3://<s3-bucket>/results_1'
             ]
@@ -33,16 +33,16 @@ SPARK_STEPS_1 = [
     }
 ]
 
-SPARK_STEPS_2 = [
+SPARK_STEP_2_PROPS = [
     {
-        'Name': 'calculate_movie_ratings_2',
+        'Name': 'movie_ratings_paralell',
         'ActionOnFailure': 'CONTINUE',
         'HadoopJarStep': {
             'Jar': 'command-runner.jar',
             'Args': [
                 'spark-submit',
                 '--deploy-mode', 'cluster',
-                's3://<s3-bucket>/jobs/movies-analytics.py',
+                's3://<s3-bucket>/jobs/prepare_tags.py',
                 '-i', 's3://<s3-bucket>/data',
                 '-o', 's3://<s3-bucket>/results_2'
             ]
@@ -61,48 +61,49 @@ with DAG(
         dagrun_timeout=timedelta(hours=2),
         schedule_interval=None
 ) as dag:
-    cluster_creator = EmrCreateJobFlowOperator(
+    create_cluster = EmrCreateJobFlowOperator(
         task_id='create_emr_cluster',
         job_flow_overrides=JOB_FLOW_OVERRIDES,
         aws_conn_id='aws_default',
         emr_conn_id='emr_default'
     )
 
-    step_adder_1 = EmrAddStepsOperator(
+    add_step_1 = EmrAddStepsOperator(
         task_id='movie_analytics_job_1',
         job_flow_id="{{ task_instance.xcom_pull(task_ids='create_emr_cluster', key='return_value') }}",
         aws_conn_id='aws_default',
-        steps=SPARK_STEPS_1
+        steps=SPARK_STEP_1_PROPS
     )
 
-    step_checker_1 = EmrStepSensor(
+    wait_for_step_1 = EmrStepSensor(
         task_id='wait_for_analytics_completion_1',
         job_flow_id="{{ task_instance.xcom_pull('create_emr_cluster', key='return_value') }}",
         step_id="{{ task_instance.xcom_pull(task_ids='movie_analytics_job_1', key='return_value')[0] }}",
         aws_conn_id='aws_default'
     )
 
-    step_adder_2 = EmrAddStepsOperator(
+    add_step_2 = EmrAddStepsOperator(
         task_id='movie_analytics_job_2',
         job_flow_id="{{ task_instance.xcom_pull(task_ids='create_emr_cluster', key='return_value') }}",
         aws_conn_id='aws_default',
-        steps=SPARK_STEPS_2
+        steps=SPARK_STEP_2_PROPS
     )
 
-    step_checker_2 = EmrStepSensor(
+    wait_for_step_2 = EmrStepSensor(
         task_id='wait_for_analytics_completion_2',
         job_flow_id="{{ task_instance.xcom_pull('create_emr_cluster', key='return_value') }}",
         step_id="{{ task_instance.xcom_pull(task_ids='movie_analytics_job_2', key='return_value')[0] }}",
         aws_conn_id='aws_default'
     )
 
-    cluster_remover = EmrTerminateJobFlowOperator(
+    terminate_cluster = EmrTerminateJobFlowOperator(
         task_id='remove_cluster',
         job_flow_id="{{ task_instance.xcom_pull(task_ids='create_emr_cluster', key='return_value') }}",
         aws_conn_id='aws_default'
     )
 
-    step_adder_1 << cluster_creator
-    step_adder_2 << cluster_creator
-    step_adder_1 >> step_checker_1 >> cluster_remover
-    step_adder_2 >> step_checker_2 >> cluster_remover
+
+    create_cluster >> [add_step_1, add_step_2]
+    wait_for_step_1 << add_step_1
+    wait_for_step_2 << add_step_2
+    terminate_cluster << [wait_for_step_1, wait_for_step_2]

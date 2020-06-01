@@ -5,31 +5,28 @@ from pyspark.sql import SparkSession
 def main(
         input_path,
         output_path):
-    """Create Spark Session and execute `Job.run`."""
     spark = SparkSession.builder.appName('Movie Analytics').getOrCreate()
 
     movie_df = spark.read \
         .format("csv") \
         .option("mode", "DROPMALFORMED") \
         .option("header", "true") \
-        .load(input_path + "/movies.csv")
+        .load(f"{input_path}/movies.csv")
 
-    raitings_df = spark.read.format("csv") \
+    tags_df = spark.read \
+        .format("csv") \
         .option("mode", "DROPMALFORMED") \
         .option("header", "true") \
-        .load(input_path + "/ratings.csv")
+        .load(f"{input_path}/tags.csv")
 
-    joined_df = raitings_df.join(movie_df, movie_df.movieId == raitings_df.movieId)
+    joined_df = movie_df.join(tags_df, movie_df.movieId == tags_df.movieId).select([movie_df['movieId'],'title','genres','tag'])
 
-    joined_df.registerTempTable("movies_ratings")
-    result_df = spark.sql(
-        "select title, "
-        "sum(rating)/count(*) as weight_avg, "
-        "count(*) as num_votes  "
-        "from movies_ratings group by title order by num_votes desc")
-
-    result_df.repartition(3).write.format("csv").mode("overwrite").options(header="true").save(
-        path=output_path + "/ratings_result")
+    joined_df.\
+        coalesce(3).\
+        write.format("csv").\
+        mode("overwrite").\
+        options(header="true").\
+        save(path=f"{output_path}/ratings_result")
 
 
 if __name__ == '__main__':

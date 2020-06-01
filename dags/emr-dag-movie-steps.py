@@ -25,7 +25,7 @@ SPARK_TEST_STEPS = [
             'Args': [
                 'spark-submit',
                 '--deploy-mode', 'cluster',
-                's3://<s3-bucket>/jobs/movies-analytics.py',
+                's3://<s3-bucket>/jobs/avg_rating.py',
                 '-i', 's3://<s3-bucket>/data',
                 '-o', 's3://<s3-bucket>/results'
             ]
@@ -43,31 +43,31 @@ with DAG(
         dagrun_timeout=timedelta(hours=2),
         schedule_interval=None
 ) as dag:
-    cluster_creator = EmrCreateJobFlowOperator(
+    create_cluster = EmrCreateJobFlowOperator(
         task_id='create_emr_cluster',
         job_flow_overrides=JOB_FLOW_OVERRIDES,
         aws_conn_id='aws_default',
         emr_conn_id='emr_default'
     )
 
-    step_adder = EmrAddStepsOperator(
+    add_step = EmrAddStepsOperator(
         task_id='movie_analytics_job',
         job_flow_id="{{ task_instance.xcom_pull(task_ids='create_emr_cluster', key='return_value') }}",
         aws_conn_id='aws_default',
         steps=SPARK_TEST_STEPS
     )
 
-    step_checker = EmrStepSensor(
+    wait_for_step = EmrStepSensor(
         task_id='wait_for_analytics_completion',
         job_flow_id="{{ task_instance.xcom_pull('create_emr_cluster', key='return_value') }}",
         step_id="{{ task_instance.xcom_pull(task_ids='movie_analytics_job', key='return_value')[0] }}",
         aws_conn_id='aws_default'
     )
 
-    cluster_remover = EmrTerminateJobFlowOperator(
+    remove_cluster = EmrTerminateJobFlowOperator(
         task_id='remove_cluster',
         job_flow_id="{{ task_instance.xcom_pull(task_ids='create_emr_cluster', key='return_value') }}",
         aws_conn_id='aws_default'
     )
 
-    cluster_creator >> step_adder >> step_checker >> cluster_remover
+    create_cluster >> add_step >> wait_for_step >> remove_cluster
